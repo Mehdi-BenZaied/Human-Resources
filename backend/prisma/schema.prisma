@@ -1,0 +1,323 @@
+// Prisma schema — HR Portal API
+// Database: MySQL 8
+// Run: npx prisma migrate dev --name init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ─────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  admin
+  employee
+}
+
+enum EmployeeStatus {
+  active
+  on_leave
+  inactive
+}
+
+enum LeaveRequestStatus {
+  pending
+  approved
+  rejected
+}
+
+enum LeaveType {
+  annual_leave
+  sick_leave
+  maternity_leave
+  emergency_leave
+}
+
+enum AttendanceStatus {
+  present
+  late
+  absent
+  half_day
+  on_leave
+}
+
+enum PayrollStatus {
+  draft
+  processing
+  paid
+  failed
+}
+
+enum JobStatus {
+  draft
+  open
+  closed
+}
+
+enum CandidateStatus {
+  applied
+  screening
+  interview_scheduled
+  offered
+  hired
+  rejected
+}
+
+enum NotificationType {
+  announcement
+  holiday
+  policy_update
+  leave_update
+  system
+}
+
+enum DocumentType {
+  contract
+  id_proof
+  payslip
+  hr_document
+  certificate
+  other
+}
+
+// ── Tables ────────────────────────────────────────────────────────────────────
+
+model User {
+  id                       String           @id @default(uuid()) @db.Char(36)
+  name                     String           @db.VarChar(100)
+  email                    String           @unique @db.VarChar(255)
+  password                 String           @db.VarChar(255) // bcrypt hash
+  role                     UserRole         @default(employee)
+  is_active                Boolean          @default(true)
+  last_login_at            DateTime?
+  password_reset_token     String?          @db.VarChar(255)
+  password_reset_expires_at DateTime?
+  created_at               DateTime         @default(now())
+  updated_at               DateTime         @updatedAt
+
+  employee_profile         Employee?        @relation("UserEmployeeProfile")
+  notifications_created    Notification[]   @relation("NotificationCreator")
+  approvals                LeaveRequest[]   @relation("LeaveRequestApprover")
+  attendance_approvals     Attendance[]     @relation("AttendanceApprover")
+  payroll_runs             Payroll[]        @relation("PayrollGenerator")
+  uploaded_documents       Document[]       @relation("DocumentUploader")
+
+  @@map("users")
+}
+
+model Department {
+  id         String    @id @default(uuid()) @db.Char(36)
+  name       String    @unique @db.VarChar(100)
+  manager_id String?   @unique @db.Char(36)
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+
+  employees  Employee[]
+  jobs       Job[]
+  manager    Employee? @relation("DepartmentManager", fields: [manager_id], references: [id], onDelete: SetNull)
+
+  @@map("departments")
+}
+
+model Employee {
+  id                  String           @id @default(uuid()) @db.Char(36)
+  name                String           @db.VarChar(100)
+  email               String           @unique @db.VarChar(255)
+  title               String           @db.VarChar(100) // job title
+  salary              Decimal?         @db.Decimal(10, 2)
+  status              EmployeeStatus   @default(active)
+  start_date          DateTime         @db.Date
+  profile_picture_url  String?          @db.VarChar(255)
+  created_at          DateTime         @default(now())
+  updated_at          DateTime         @updatedAt
+
+  department_id       String           @db.Char(36)
+  department          Department       @relation(fields: [department_id], references: [id])
+
+  user_id             String?          @unique @db.Char(36)
+  user                User?            @relation("UserEmployeeProfile", fields: [user_id], references: [id], onDelete: SetNull)
+
+  manager_id          String?          @db.Char(36)
+  manager             Employee?        @relation("EmployeeManagers", fields: [manager_id], references: [id], onDelete: SetNull)
+  subordinates        Employee[]       @relation("EmployeeManagers")
+
+  managed_department  Department?      @relation("DepartmentManager")
+
+  leave_requests      LeaveRequest[]
+  attendance_records   Attendance[]
+  payslips            Payslip[]
+  documents           Document[]
+  candidates          Candidate[]
+
+  @@map("employees")
+}
+
+model LeaveRequest {
+  id                  String              @id @default(uuid()) @db.Char(36)
+  leave_type          LeaveType           @default(annual_leave)
+  start_date          DateTime            @db.Date
+  end_date            DateTime            @db.Date
+  reason              String              @db.Text
+  admin_comment       String?             @db.Text
+  status              LeaveRequestStatus  @default(pending)
+  created_at          DateTime            @default(now())
+  updated_at          DateTime            @updatedAt
+
+  employee_id         String              @db.Char(36)
+  employee            Employee            @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  approved_by_user_id String?             @db.Char(36)
+  approved_by_user    User?               @relation("LeaveRequestApprover", fields: [approved_by_user_id], references: [id], onDelete: SetNull)
+
+  @@map("leave_requests")
+}
+
+model Attendance {
+  id                 String            @id @default(uuid()) @db.Char(36)
+  work_date          DateTime          @db.Date
+  check_in_at        DateTime?
+  check_out_at       DateTime?
+  status             AttendanceStatus  @default(present)
+  is_manual          Boolean           @default(false)
+  correction_note    String?           @db.Text
+  approved_at        DateTime?
+  created_at         DateTime          @default(now())
+  updated_at         DateTime          @updatedAt
+
+  employee_id        String            @db.Char(36)
+  employee           Employee          @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  approved_by_user_id String?           @db.Char(36)
+  approved_by_user   User?             @relation("AttendanceApprover", fields: [approved_by_user_id], references: [id], onDelete: SetNull)
+
+  @@unique([employee_id, work_date])
+  @@map("attendance_records")
+}
+
+model Payroll {
+  id                  String         @id @default(uuid()) @db.Char(36)
+  period_start        DateTime       @db.Date
+  period_end          DateTime       @db.Date
+  pay_date            DateTime?      @db.Date
+  status              PayrollStatus  @default(draft)
+  total_gross         Decimal?       @db.Decimal(12, 2)
+  total_deductions    Decimal?       @db.Decimal(12, 2)
+  total_net           Decimal?       @db.Decimal(12, 2)
+  created_at          DateTime       @default(now())
+  updated_at          DateTime       @updatedAt
+
+  generated_by_user_id String?        @db.Char(36)
+  generated_by_user    User?          @relation("PayrollGenerator", fields: [generated_by_user_id], references: [id], onDelete: SetNull)
+
+  payslips            Payslip[]
+
+  @@unique([period_start, period_end])
+  @@map("payrolls")
+}
+
+model Payslip {
+  id           String   @id @default(uuid()) @db.Char(36)
+  gross_pay    Decimal  @db.Decimal(10, 2)
+  bonuses      Decimal  @default(0) @db.Decimal(10, 2)
+  deductions   Decimal  @default(0) @db.Decimal(10, 2)
+  net_pay      Decimal  @db.Decimal(10, 2)
+  currency     String   @default("USD") @db.VarChar(10)
+  issued_at    DateTime?
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  employee_id  String   @db.Char(36)
+  employee     Employee @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  payroll_id   String   @db.Char(36)
+  payroll      Payroll  @relation(fields: [payroll_id], references: [id], onDelete: Cascade)
+
+  @@unique([payroll_id, employee_id])
+  @@map("payslips")
+}
+
+model Job {
+  id           String   @id @default(uuid()) @db.Char(36)
+  title        String   @db.VarChar(150)
+  description  String   @db.Text
+  location     String?  @db.VarChar(150)
+  status       JobStatus @default(draft)
+  opened_at    DateTime?
+  closed_at    DateTime?
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  department_id String?     @db.Char(36)
+  department    Department? @relation(fields: [department_id], references: [id], onDelete: SetNull)
+
+  candidates   Candidate[]
+
+  @@map("jobs")
+}
+
+model Candidate {
+  id            String           @id @default(uuid()) @db.Char(36)
+  name          String           @db.VarChar(100)
+  email         String           @db.VarChar(255)
+  phone         String?          @db.VarChar(50)
+  resume_url    String?          @db.VarChar(255)
+  cover_letter  String?          @db.Text
+  status        CandidateStatus  @default(applied)
+  interview_at  DateTime?
+  notes         String?          @db.Text
+  created_at    DateTime         @default(now())
+  updated_at    DateTime         @updatedAt
+
+  job_id        String           @db.Char(36)
+  job           Job              @relation(fields: [job_id], references: [id], onDelete: Cascade)
+
+  employee_id   String?          @unique @db.Char(36)
+  employee     Employee?        @relation(fields: [employee_id], references: [id], onDelete: SetNull)
+
+  @@map("candidates")
+}
+
+model Notification {
+  id                 String            @id @default(uuid()) @db.Char(36)
+  type               NotificationType  @default(announcement)
+  title              String            @db.VarChar(150)
+  message            String            @db.Text
+  audience_role      UserRole?
+  is_published       Boolean           @default(true)
+  published_at       DateTime?
+  expires_at         DateTime?
+  created_at         DateTime          @default(now())
+  updated_at         DateTime          @updatedAt
+
+  created_by_user_id String?           @db.Char(36)
+  created_by_user    User?             @relation("NotificationCreator", fields: [created_by_user_id], references: [id], onDelete: SetNull)
+
+  @@map("notifications")
+}
+
+model Document {
+  id                   String         @id @default(uuid()) @db.Char(36)
+  document_type        DocumentType   @default(other)
+  title                String         @db.VarChar(150)
+  file_name            String         @db.VarChar(255)
+  file_url             String         @db.VarChar(500)
+  mime_type            String?        @db.VarChar(100)
+  file_size            Int?
+  description          String?        @db.Text
+  is_confidential      Boolean        @default(false)
+  uploaded_at          DateTime       @default(now())
+  created_at           DateTime       @default(now())
+  updated_at           DateTime       @updatedAt
+
+  employee_id          String?        @db.Char(36)
+  employee             Employee?      @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+
+  uploaded_by_user_id   String?        @db.Char(36)
+  uploaded_by_user      User?          @relation("DocumentUploader", fields: [uploaded_by_user_id], references: [id], onDelete: SetNull)
+
+  @@map("documents")
+}
