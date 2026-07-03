@@ -39,7 +39,7 @@ pipeline {
         REGISTRY_CREDENTIALS = 'DockerHub'
 
         // The Compose file must use ${FRONTEND_REF} and ${BACKEND_REF}.
-        COMPOSE_FILE = 'compose.yml'
+        COMPOSE_FILE = 'docker-compose.yml'
     }
 
     stages {
