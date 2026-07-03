@@ -37,9 +37,7 @@ pipeline {
         BACKEND_IMAGE  = 'mehdibenzaied/hr-portal-backend'
 
         REGISTRY_CREDENTIALS = 'DockerHub'
-
-        // The Compose file must use ${FRONTEND_REF} and ${BACKEND_REF}.
-        COMPOSE_FILE = 'compose.yml'
+        COMPOSE_FILE = 'docker-compose.yml'
     }
 
     stages {
@@ -267,8 +265,6 @@ pipeline {
 
         always {
             sh '''
-                docker logout 2>/dev/null || true
-
                 if [ -n "${FRONTEND_REF:-}" ]; then
                   docker image rm "$FRONTEND_REF" 2>/dev/null || true
                 fi
