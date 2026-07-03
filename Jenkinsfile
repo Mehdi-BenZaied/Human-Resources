@@ -37,7 +37,9 @@ pipeline {
         BACKEND_IMAGE  = 'mehdibenzaied/hr-portal-backend'
 
         REGISTRY_CREDENTIALS = 'DockerHub'
-        COMPOSE_FILE = 'docker-compose.yml'
+
+        // The Compose file must use ${FRONTEND_REF} and ${BACKEND_REF}.
+        COMPOSE_FILE = 'compose.yml'
     }
 
     stages {
