@@ -1,91 +1,66 @@
-# ─────────────────────────────────────────────────────────────────────────────
 # HR Portal — Docker Compose
 #
-# Services:
-#   db       — MySQL 8        (port 3306)
-#   backend  — FastAPI API    (port 4000)  Python 3.12, multi-stage build
-#   frontend — Angular SSR    (port 4200)  Node 22,    multi-stage build
+# Local:
+#   docker compose up --build
 #
-# Quick start:
-#   cp .env.example .env          # edit as needed
-#   docker compose up --build     # first run (builds images + seeds DB)
-#   docker compose up -d          # subsequent runs (detached)
-#   docker compose logs -f        # tail all logs
-#   docker compose down -v        # stop everything and remove DB volume
-#
-# Rebuild a single service:
-#   docker compose build backend
-#   docker compose up -d --no-deps backend
-# ─────────────────────────────────────────────────────────────────────────────
+# Jenkins:
+#   FRONTEND_REF and BACKEND_REF point to the exact images built by the pipeline.
+#   Host ports are configurable so the CI test can avoid port conflicts.
 
 services:
-
-  # ── MySQL 8 ─────────────────────────────────────────────────────────────────
   db:
     image: mysql:8.0
-    container_name: hr_portal_db
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
-      MYSQL_DATABASE:      ${DB_NAME:-hr_portal}
-      MYSQL_USER:          ${DB_USER:-hr_user}
-      MYSQL_PASSWORD:      ${DB_PASSWORD:-hr_password}
+      MYSQL_DATABASE: ${DB_NAME:-hr_portal}
+      MYSQL_USER: ${DB_USER:-hr_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-hr_password}
     ports:
-      # Host port 3307 avoids conflict with any local MySQL already on 3306.
-      # Connect from your machine with: mysql -h 127.0.0.1 -P 3307 -u hr_user -p
-      # Inside Docker (backend container) the service is still reachable as db:3306.
-      - "3307:3306"
+      - "${DB_HOST_PORT:-3307}:3306"
     volumes:
       - db_data:/var/lib/mysql
-      # Optional: place custom my.cnf at ./mysql/my.cnf to tune the server
-      # - ./mysql/my.cnf:/etc/mysql/conf.d/my.cnf:ro
     networks:
       - hr_net
     healthcheck:
       test:
-        - CMD
-        - mysqladmin
-        - ping
-        - -h
-        - localhost
-        - -u
-        - root
-        - --password=${DB_ROOT_PASSWORD:-root}
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "--password=${DB_ROOT_PASSWORD:-root}"
+        ]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 30s
 
-  # ── FastAPI backend ──────────────────────────────────────────────────────────
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: hr-portal-backend:latest
-    container_name: hr_portal_backend
+    image: ${BACKEND_REF:-hr-portal-backend:latest}
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
     environment:
-      # Database — uses the db service name as the host on hr_net
-      DATABASE_URL:                "mysql+pymysql://${DB_USER:-hr_user}:${DB_PASSWORD:-hr_password}@db:3306/${DB_NAME:-hr_portal}"
-      # Auth
-      SECRET_KEY:                  "${SECRET_KEY:-hr-portal-jwt-secret-change-in-production}"
-      ALGORITHM:                   "HS256"
+      DATABASE_URL: "mysql+pymysql://${DB_USER:-hr_user}:${DB_PASSWORD:-hr_password}@db:3306/${DB_NAME:-hr_portal}"
+      SECRET_KEY: "${SECRET_KEY:-hr-portal-jwt-secret-change-in-production}"
+      ALGORITHM: "HS256"
       ACCESS_TOKEN_EXPIRE_MINUTES: "10080"
-      # App
-      APP_ENV:                     "${APP_ENV:-production}"
-      BCRYPT_ROUNDS:               "${BCRYPT_ROUNDS:-12}"
-      PORT:                        "4000"
-      # CORS — allow the frontend origin
-      CORS_ORIGINS:                "${CORS_ORIGINS:-http://localhost:4200}"
+      APP_ENV: "${APP_ENV:-production}"
+      BCRYPT_ROUNDS: "${BCRYPT_ROUNDS:-12}"
+      PORT: "4000"
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:4200}"
     ports:
-      - "4000:4000"
+      - "${BACKEND_HOST_PORT:-4000}:4000"
     networks:
       - hr_net
-    # HEALTHCHECK is defined in the Dockerfile; compose re-uses it.
-    # Override here only if you need different timings in CI:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
       interval: 15s
@@ -93,28 +68,22 @@ services:
       retries: 5
       start_period: 40s
 
-  # ── Angular SSR frontend ─────────────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        # Baked into the Angular bundle at build time.
-        # Must be the URL the user's BROWSER can reach — not the Docker network name.
-        # Default: http://localhost:4000 works when the backend port is forwarded.
-        # Cloud: set API_BASE_URL=https://api.yourdomain.com in your .env
         API_BASE_URL: "${API_BASE_URL:-http://localhost:4000}"
-    image: hr-portal-frontend:latest
-    container_name: hr_portal_frontend
+    image: ${FRONTEND_REF:-hr-portal-frontend:latest}
     restart: unless-stopped
     depends_on:
       backend:
         condition: service_healthy
     environment:
       NODE_ENV: production
-      PORT:     "4200"
+      PORT: "4200"
     ports:
-      - "4200:4200"
+      - "${FRONTEND_HOST_PORT:-4200}:4200"
     networks:
       - hr_net
     healthcheck:
@@ -124,12 +93,10 @@ services:
       retries: 5
       start_period: 30s
 
-# ── Named volumes ──────────────────────────────────────────────────────────────
 volumes:
   db_data:
     driver: local
 
-# ── Networks ───────────────────────────────────────────────────────────────────
 networks:
   hr_net:
     driver: bridge

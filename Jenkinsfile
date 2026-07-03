@@ -1,13 +1,4 @@
 pipeline {
-    /*
-     * The selected Linux agent needs only:
-     *   - Java
-     *   - Git
-     *   - Docker
-     *   - Docker Compose
-     *
-     * Node.js and Python are supplied by the Dockerfiles.
-     */
     agent {
         label 'linux && docker'
     }
@@ -20,22 +11,17 @@ pipeline {
         buildDiscarder(logRotator(numToKeepStr: '15'))
     }
 
-    triggers {
-        githubPush()
-    }
-
     parameters {
         string(
             name: 'API_BASE_URL',
             defaultValue: 'http://localhost:4000',
-            description: 'Public API URL compiled into the Angular SSR image'
+            description: 'Public API URL compiled into the Angular frontend image'
         )
     }
 
     environment {
         FRONTEND_IMAGE = 'mehdibenzaied/hr-portal-frontend'
-        BACKEND_IMAGE  = 'mehdibenzaied/hr-portal-backend'
-
+        BACKEND_IMAGE = 'mehdibenzaied/hr-portal-backend'
         REGISTRY_CREDENTIALS = 'DockerHub'
         COMPOSE_FILE = 'docker-compose.yml'
     }
@@ -52,16 +38,21 @@ pipeline {
                     ).trim()
 
                     /*
-                     * BRANCH_NAME exists in Multibranch Pipeline jobs.
-                     * GIT_BRANCH commonly exists in a normal Pipeline-from-SCM job.
+                     * A normal Pipeline-from-SCM job does not always expose
+                     * BRANCH_NAME or GIT_BRANCH. The GitSCM branch configured
+                     * on the Jenkins job is therefore used as a fallback.
                      */
-                    def rawBranch = env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'local'
-                    rawBranch = rawBranch.replaceFirst(/^origin\//, '')
+                    def configuredBranch = scm.branches[0].name
+                    def rawBranch = env.BRANCH_NAME ?: env.GIT_BRANCH ?: configuredBranch ?: 'local'
+
+                    rawBranch = rawBranch
+                        .replaceFirst(/^\*\//, '')
+                        .replaceFirst(/^origin\//, '')
 
                     env.SOURCE_BRANCH = rawBranch
                     env.SAFE_BRANCH = rawBranch.replaceAll('[^A-Za-z0-9_.-]', '-')
-
                     env.IMAGE_TAG = "${env.SAFE_BRANCH}-${env.SHORT_SHA}-${env.BUILD_NUMBER}"
+
                     env.FRONTEND_REF = "${env.FRONTEND_IMAGE}:${env.IMAGE_TAG}"
                     env.BACKEND_REF = "${env.BACKEND_IMAGE}:${env.IMAGE_TAG}"
                     env.CI_PROJECT = "hr-portal-ci-${env.BUILD_NUMBER}"
@@ -77,10 +68,7 @@ pipeline {
             steps {
                 sh '''
                     export FRONTEND_REF BACKEND_REF
-
-                    docker compose \
-                      --file "$COMPOSE_FILE" \
-                      config --quiet
+                    docker compose --file "$COMPOSE_FILE" config --quiet
                 '''
             }
         }
@@ -120,7 +108,6 @@ pipeline {
             steps {
                 sh '''
                     export FRONTEND_REF BACKEND_REF
-
                     export DB_HOST_PORT=0
                     export BACKEND_HOST_PORT=0
                     export FRONTEND_HOST_PORT=0
@@ -195,17 +182,17 @@ pipeline {
                         docker push "$BACKEND_REF"
 
                         docker tag "$FRONTEND_REF" "$FRONTEND_IMAGE:$SAFE_BRANCH-latest"
-                        docker tag "$BACKEND_REF"  "$BACKEND_IMAGE:$SAFE_BRANCH-latest"
+                        docker tag "$BACKEND_REF" "$BACKEND_IMAGE:$SAFE_BRANCH-latest"
 
                         docker push "$FRONTEND_IMAGE:$SAFE_BRANCH-latest"
                         docker push "$BACKEND_IMAGE:$SAFE_BRANCH-latest"
 
                         if [ "$SOURCE_BRANCH" = "main" ]; then
-                          docker tag "$FRONTEND_REF" "$FRONTEND_IMAGE:latest"
-                          docker tag "$BACKEND_REF"  "$BACKEND_IMAGE:latest"
+                            docker tag "$FRONTEND_REF" "$FRONTEND_IMAGE:latest"
+                            docker tag "$BACKEND_REF" "$BACKEND_IMAGE:latest"
 
-                          docker push "$FRONTEND_IMAGE:latest"
-                          docker push "$BACKEND_IMAGE:latest"
+                            docker push "$FRONTEND_IMAGE:latest"
+                            docker push "$BACKEND_IMAGE:latest"
                         fi
                     '''
                 }
@@ -219,15 +206,16 @@ pipeline {
                 }
             }
 
-            input {
-                message "Deploy ${env.IMAGE_TAG}?"
-                ok 'Deploy'
-            }
-
             steps {
+                script {
+                    input(
+                        message: "Deploy ${env.IMAGE_TAG}?",
+                        ok: 'Deploy'
+                    )
+                }
+
                 sh '''
                     export FRONTEND_REF BACKEND_REF
-
                     export DB_HOST_PORT=3307
                     export BACKEND_HOST_PORT=4000
                     export FRONTEND_HOST_PORT=4200
@@ -248,15 +236,7 @@ pipeline {
 
     post {
         success {
-            script {
-                if (env.SOURCE_BRANCH == 'main') {
-                    echo "Build, validation, publication and deployment succeeded: ${env.IMAGE_TAG}"
-                } else if (env.SOURCE_BRANCH == 'develop') {
-                    echo "Build, validation and publication succeeded: ${env.IMAGE_TAG}"
-                } else {
-                    echo "Build and validation succeeded: ${env.IMAGE_TAG}"
-                }
-            }
+            echo "Pipeline succeeded for ${env.SOURCE_BRANCH}: ${env.IMAGE_TAG}"
         }
 
         failure {
@@ -264,16 +244,6 @@ pipeline {
         }
 
         always {
-            sh '''
-                if [ -n "${FRONTEND_REF:-}" ]; then
-                  docker image rm "$FRONTEND_REF" 2>/dev/null || true
-                fi
-
-                if [ -n "${BACKEND_REF:-}" ]; then
-                  docker image rm "$BACKEND_REF" 2>/dev/null || true
-                fi
-            '''
-
             cleanWs()
         }
     }
