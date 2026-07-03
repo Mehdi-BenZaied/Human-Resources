@@ -31,7 +31,11 @@
             "server": "src/main.server.ts",
             "outputMode": "server",
             "security": {
-              "allowedHosts": []
+              "allowedHosts": [
+                "localhost",
+                "hr_portal_frontend",
+                "frontend"
+              ]
             },
             "ssr": {
               "entry": "src/server.ts"
