@@ -1,12 +1,12 @@
 pipeline {
     /*
-     * The Jenkins agent only needs:
-     *   - Java, to connect to the Jenkins controller
-     *   - Git, to check out the repository
-     *   - Docker Engine / Docker CLI
-     *   - Docker Compose plugin
+     * The selected Linux agent needs only:
+     *   - Java
+     *   - Git
+     *   - Docker
+     *   - Docker Compose
      *
-     * Node.js, npm, Python and pip are provided by the Dockerfiles.
+     * Node.js and Python are supplied by the Dockerfiles.
      */
     agent {
         label 'linux && docker'
@@ -28,20 +28,16 @@ pipeline {
         string(
             name: 'API_BASE_URL',
             defaultValue: 'http://localhost:4000',
-            description: 'Public API URL compiled into the Angular bundle'
+            description: 'Public API URL compiled into the Angular SSR image'
         )
     }
 
     environment {
-        // Docker Hub repositories under the mehdibenzaied namespace.
-        FRONTEND_IMAGE = 'mehdibenzaied/devops-mastering-frontend'
-        BACKEND_IMAGE  = 'mehdibenzaied/devops-mastering-backend'
+        FRONTEND_IMAGE = 'mehdibenzaied/hr-portal-frontend'
+        BACKEND_IMAGE  = 'mehdibenzaied/hr-portal-backend'
 
-        // Jenkins username/password credential used for Docker Hub.
         REGISTRY_CREDENTIALS = 'DockerHub'
-
-        // The Compose file must use ${FRONTEND_REF} and ${BACKEND_REF}.
-        COMPOSE_FILE = 'compose.yaml'
+        COMPOSE_FILE = 'docker-compose.yml'
     }
 
     stages {
@@ -55,15 +51,23 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    env.SAFE_BRANCH = (env.BRANCH_NAME ?: 'local')
-                        .replaceAll('[^A-Za-z0-9_.-]', '-')
+                    /*
+                     * BRANCH_NAME exists in Multibranch Pipeline jobs.
+                     * GIT_BRANCH commonly exists in a normal Pipeline-from-SCM job.
+                     */
+                    def rawBranch = env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'local'
+                    rawBranch = rawBranch.replaceFirst(/^origin\//, '')
+
+                    env.SOURCE_BRANCH = rawBranch
+                    env.SAFE_BRANCH = rawBranch.replaceAll('[^A-Za-z0-9_.-]', '-')
 
                     env.IMAGE_TAG = "${env.SAFE_BRANCH}-${env.SHORT_SHA}-${env.BUILD_NUMBER}"
                     env.FRONTEND_REF = "${env.FRONTEND_IMAGE}:${env.IMAGE_TAG}"
                     env.BACKEND_REF = "${env.BACKEND_IMAGE}:${env.IMAGE_TAG}"
-                    env.CI_PROJECT = "devops-mastering-ci-${env.BUILD_NUMBER}"
+                    env.CI_PROJECT = "hr-portal-ci-${env.BUILD_NUMBER}"
                 }
 
+                echo "Branch:         ${env.SOURCE_BRANCH}"
                 echo "Frontend image: ${env.FRONTEND_REF}"
                 echo "Backend image:  ${env.BACKEND_REF}"
             }
@@ -73,7 +77,10 @@ pipeline {
             steps {
                 sh '''
                     export FRONTEND_REF BACKEND_REF
-                    docker compose --file "$COMPOSE_FILE" config --quiet
+
+                    docker compose \
+                      --file "$COMPOSE_FILE" \
+                      config --quiet
                 '''
             }
         }
@@ -109,18 +116,14 @@ pipeline {
             }
         }
 
-        /*
-         * This validates that the complete stack starts successfully.
-         * Docker Compose waits for the HEALTHCHECK instructions contained
-         * in the frontend and backend images, plus any database healthcheck
-         * declared in compose.yaml.
-         *
-         * This is a startup/integration check, not a replacement for unit tests.
-         */
         stage('Compose Integration Test') {
             steps {
                 sh '''
                     export FRONTEND_REF BACKEND_REF
+
+                    export DB_HOST_PORT=0
+                    export BACKEND_HOST_PORT=0
+                    export FRONTEND_HOST_PORT=0
 
                     docker compose \
                       --project-name "$CI_PROJECT" \
@@ -138,9 +141,12 @@ pipeline {
                 unsuccessful {
                     sh '''
                         export FRONTEND_REF BACKEND_REF
+                        export DB_HOST_PORT=0
+                        export BACKEND_HOST_PORT=0
+                        export FRONTEND_HOST_PORT=0
 
                         docker compose \
-                          --project-name "${CI_PROJECT:-devops-mastering-ci-$BUILD_NUMBER}" \
+                          --project-name "${CI_PROJECT:-hr-portal-ci-$BUILD_NUMBER}" \
                           --file "$COMPOSE_FILE" \
                           logs --no-color || true
                     '''
@@ -149,9 +155,12 @@ pipeline {
                 always {
                     sh '''
                         export FRONTEND_REF BACKEND_REF
+                        export DB_HOST_PORT=0
+                        export BACKEND_HOST_PORT=0
+                        export FRONTEND_HOST_PORT=0
 
                         docker compose \
-                          --project-name "${CI_PROJECT:-devops-mastering-ci-$BUILD_NUMBER}" \
+                          --project-name "${CI_PROJECT:-hr-portal-ci-$BUILD_NUMBER}" \
                           --file "$COMPOSE_FILE" \
                           down --volumes --remove-orphans || true
                     '''
@@ -161,9 +170,8 @@ pipeline {
 
         stage('Publish Images') {
             when {
-                anyOf {
-                    branch 'main'
-                    branch 'develop'
+                expression {
+                    env.SOURCE_BRANCH == 'main' || env.SOURCE_BRANCH == 'develop'
                 }
             }
 
@@ -183,19 +191,16 @@ pipeline {
                             --username "$REGISTRY_USER" \
                             --password-stdin
 
-                        # Immutable tags identify the exact Jenkins build.
                         docker push "$FRONTEND_REF"
                         docker push "$BACKEND_REF"
 
-                        # Mutable branch tags point to the latest validated build.
                         docker tag "$FRONTEND_REF" "$FRONTEND_IMAGE:$SAFE_BRANCH-latest"
                         docker tag "$BACKEND_REF"  "$BACKEND_IMAGE:$SAFE_BRANCH-latest"
 
                         docker push "$FRONTEND_IMAGE:$SAFE_BRANCH-latest"
                         docker push "$BACKEND_IMAGE:$SAFE_BRANCH-latest"
 
-                        # The global latest tag is moved only by the main branch.
-                        if [ "$BRANCH_NAME" = "main" ]; then
+                        if [ "$SOURCE_BRANCH" = "main" ]; then
                           docker tag "$FRONTEND_REF" "$FRONTEND_IMAGE:latest"
                           docker tag "$BACKEND_REF"  "$BACKEND_IMAGE:latest"
 
@@ -207,14 +212,11 @@ pipeline {
             }
         }
 
-        /*
-         * Learning deployment: the production Compose project runs on the
-         * same Docker agent as Jenkins. In a real company, deployment would
-         * normally target a dedicated server or orchestration platform.
-         */
         stage('Deploy with Compose') {
             when {
-                branch 'main'
+                expression {
+                    env.SOURCE_BRANCH == 'main'
+                }
             }
 
             input {
@@ -226,13 +228,17 @@ pipeline {
                 sh '''
                     export FRONTEND_REF BACKEND_REF
 
+                    export DB_HOST_PORT=3307
+                    export BACKEND_HOST_PORT=4000
+                    export FRONTEND_HOST_PORT=4200
+
                     docker compose \
-                      --project-name devops-mastering-prod \
+                      --project-name hr-portal-prod \
                       --file "$COMPOSE_FILE" \
                       up --detach --wait --no-build
 
                     docker compose \
-                      --project-name devops-mastering-prod \
+                      --project-name hr-portal-prod \
                       --file "$COMPOSE_FILE" \
                       ps
                 '''
@@ -243,9 +249,9 @@ pipeline {
     post {
         success {
             script {
-                if (env.BRANCH_NAME == 'main') {
+                if (env.SOURCE_BRANCH == 'main') {
                     echo "Build, validation, publication and deployment succeeded: ${env.IMAGE_TAG}"
-                } else if (env.BRANCH_NAME == 'develop') {
+                } else if (env.SOURCE_BRANCH == 'develop') {
                     echo "Build, validation and publication succeeded: ${env.IMAGE_TAG}"
                 } else {
                     echo "Build and validation succeeded: ${env.IMAGE_TAG}"
@@ -260,9 +266,16 @@ pipeline {
         always {
             sh '''
                 docker logout 2>/dev/null || true
-                docker image rm "$FRONTEND_REF" 2>/dev/null || true
-                docker image rm "$BACKEND_REF" 2>/dev/null || true
+
+                if [ -n "${FRONTEND_REF:-}" ]; then
+                  docker image rm "$FRONTEND_REF" 2>/dev/null || true
+                fi
+
+                if [ -n "${BACKEND_REF:-}" ]; then
+                  docker image rm "$BACKEND_REF" 2>/dev/null || true
+                fi
             '''
+
             cleanWs()
         }
     }
