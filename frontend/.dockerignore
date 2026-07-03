@@ -1,4 +1,17 @@
-node_modules
-dist
-.angular
+# Dependencies (reinstalled inside Docker)
+node_modules/
+.angular/
+
+# Build output (generated inside Docker)
+dist/
+
+# Dev-only files
+.env
+.env.*
 *.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

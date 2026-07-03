@@ -1,0 +1,44 @@
+# ── Python bytecode & caches ───────────────────────────────────────────────
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+
+# ── Virtual environments (never ship these — they're rebuilt in Docker) ────
+.venv/
+venv/
+env/
+
+# ── Secrets (injected via docker-compose environment: block) ──────────────
+.env
+.env.*
+!.env.example
+
+# ── Logs ──────────────────────────────────────────────────────────────────
+*.log
+
+# ── Node.js leftovers (Prisma / old Node backend) ─────────────────────────
+node_modules/
+package*.json
+package-lock.json
+tsconfig*.json
+prisma/
+src/
+dist/
+
+# ── Test / dev artefacts ──────────────────────────────────────────────────
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Editor / OS ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

@@ -1,32 +1,41 @@
-import { HttpInterceptorFn } from '@angular/common/http';
+import { HttpInterceptorFn, HttpResponse } from '@angular/common/http';
 import { map } from 'rxjs/operators';
 
 /**
- * Unwraps the backend envelope `{ status, data, ... }` so every service
- * receives the inner `data` value directly.  Auth responses keep their full
- * shape because the auth service reads `session.token` / `session.user`.
+ * Normalises FastAPI response shapes so every service receives plain data:
+ *
+ *  - POST /api/auth/login|signup → { message, data: { access_token, user } }
+ *      becomes → { token, user }
+ *  - GET  /api/auth/me          → UserOut (already flat, untouched)
+ *  - All other endpoints        → plain array or object (already flat, untouched)
+ *
+ * The interceptor only touches HttpResponse bodies, never other event types.
  */
 export const apiResponseInterceptor: HttpInterceptorFn = (request, next) => {
   return next(request).pipe(
-    map((event: any) => {
-      if (!event?.body || typeof event.body !== 'object') return event;
+    map(event => {
+      // Only process completed HTTP responses, ignore Sent/Upload/Download events
+      if (!(event instanceof HttpResponse)) return event;
 
-      const isAuthEndpoint = request.url.includes('/api/auth/');
+      const body = event.body;
 
-      // FastAPI wraps responses as { message, data: { ... } }
-      const body = 'data' in event.body ? event.body.data : event.body;
+      // ── Auth login / signup ──────────────────────────────────────────────
+      // Shape: { message: string, data: { access_token: string, token_type: string, user: {...} } }
+      const isAuthLoginOrSignup =
+        request.url.includes('/api/auth/login') ||
+        request.url.includes('/api/auth/signup');
 
-      if (isAuthEndpoint) {
-        // FastAPI returns { access_token, token_type, user }
-        // Frontend AuthService expects { token, user }
-        const normalized = body?.access_token
-          ? { token: body.access_token, user: body.user }
-          : body;
-        return event.clone({ body: normalized });
+      if (isAuthLoginOrSignup && body && typeof body === 'object' && 'data' in (body as object)) {
+        const data = (body as any).data;
+        // Rename access_token → token to match AuthService.storeSession()
+        const normalised = data?.access_token
+          ? { token: data.access_token, user: data.user }
+          : data;
+        return event.clone({ body: normalised });
       }
 
-      // All other endpoints: return unwrapped data
-      return event.clone({ body: body });
+      // All other endpoints return plain data already — no transformation needed
+      return event;
     }),
   );
 };
